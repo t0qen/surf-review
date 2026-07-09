@@ -1,11 +1,9 @@
 import openmeteo_requests
-
 import pandas as pd
 import requests_cache
 from retry_requests import retry
 
 url1 = "https://api.open-meteo.com/v1/forecast"
-
 url2 = "https://marine-api.open-meteo.com/v1/marine"
 
 
@@ -13,10 +11,12 @@ cache_session = requests_cache.CachedSession('.cache', expire_after = 3600)
 retry_session = retry(cache_session, retries = 5, backoff_factor = 0.2)
 openmeteo = openmeteo_requests.Client(session = retry_session)
 
+max_score_tolerance = 0.5 # plus on augmente ce nombre, plus il y aura d'horaires pouvant convenir
+
 min_wave_height = 0.7
 max_wave_height = 3
 min_wave_period = 6
-max_wave_period = 16
+max_wave_period = 14
 min_wind_speed = 40
 max_wind_speed = 15
 beach_direction = 45
@@ -64,75 +64,116 @@ def requests_forecast():
 
 
 def score_data(data, type): 
-    # score a data from for example hourly_wind_speed[6], in that case type would be "speed"
-    # score 0 : so bad; score 1-10
-
+    # cette fonction sert a noter une donnees de type: vitese vent, diretion vent, etc
+    # 0: c'est nul, sinon le score est entre 1 et 10
+    # type -> 0: vitesse vent, 1: direction vent, 2: hauteur vagues, 3: periode vague
+    
     score = 0
-    match type:
-        case "speed":
-            if data <= max_wind_speed:
-                score = 10
-            else:
-                if data <= min_wind_speed:
-                    score = map_range(data, min_wind_speed, max_wind_speed, 1, 10)
-                else:
-                    score = 0
-
-        case "dir":
-            # from chatgpt (i genually couldnt find a way do it otherway)
-            diff = abs(data - beach_direction)
-            diff = min(diff, 360 - diff) # bec for example 350 isnt far from 45
-            score = 10 - 10 * (diff / 180) # linear interpolation, makes a difference in degres to a score between 1 and 10
-            
-        case "height":
-            if data >= min_wave_height and data <= max_wave_height:
-                score = map_range(data, min_wave_height, max_wave_height, 1, 10)
+    if type == 0:
+        if data <= max_wind_speed:
+            score = 10
+        else:
+            if data <= min_wind_speed:
+                score = map_range(data, min_wind_speed, max_wind_speed, 1, 10)
             else:
                 score = 0
-
-        case "period":
-            if data >= min_wave_period and data <= max_wave_period:
-                score = map_range(data, min_wave_period, max_wave_period, 1, 10)
-            else:
-                score = 0
-
-
+    elif type == 1:
+        # analyse vient de chatgpt
+        diff = abs(data - beach_direction) # calcul l'ecart entre la direction de la plage et le vent
+        diff = min(diff, 360 - diff) # calcul le vrai ecart (car 45 et 355 ne sont pas loin par exemple )
+        score = 10 - 9 * (diff / 180) 
+    elif type == 2:
+        if data >= min_wave_height and data <= max_wave_height:
+            score = map_range(data, min_wave_height, max_wave_height, 1, 10)
+        else:
+            score = 0
+    elif type == 3:
+        if data >= min_wave_period and data <= max_wave_period:
+            score = map_range(data, min_wave_period, max_wave_period, 1, 10)
+        else:
+            score = 0
     return score
      
-# test = requests_forecast()
-# scored = [2]
 
-# for i in test[3]:
-#     print(i)
-#     scored[0] = score_data(i, "period")
-#     print(" Score : ", scored[0])
-#     # scored[1] = test[i]
-#     # print("Data : ", scored[1], " Score : ", scored[0])
+def get_dicts():
+    # on recup les tableaux pour chaque categories avec requests_forecast(),
+    # on analyse ces donnees et on fait des dict qui contiennent toutes les donnees
+    # importantes de la categorie, comme le score moyen, le score max et poru quelles heures, etc
 
-def get_best_score_per_hours():
-    # loop array from requests_forecast(), get their score with score_data() 
-    # and determine the hour of the day 
-    categ = requests_forecast() # categ = category
-    print(categ)
-    current = 0 # counter to not forgot which unite 
-    for i in categ: # loop 4 times, score all unites
-        if current == 0:
-            current_categ = "speed"
-        elif current == 1:
-            current_categ = "dir"
-        elif current == 2:
-            current_categ = "height"
-        else:
-            current_categ = "period"
-        print("-- Current categ: ", current_categ)
+    current_dict = {} # le dict qu'on va remplir
+
+    # les dict finaux
+    wave_height_dict = {}
+    wave_period_dict = {}
+    wind_speed_dict = {}
+    wind_dir_dict = {}
+    
+
+    categ = requests_forecast() # on recupere les 4 tableaux des categories
+    current = 0 # pour savoir sur qu'elle ccategories on est actuellement
+    # rappel -> 0: vitesse vent, 1: direction vent, 2: hauteur vagues, 3: periode vague
+    for i in categ: # boucle 4 fois, i sera le tableau a analyser
         
         hour = 0
-        for u in i:
+        max_score = 0
+        scores = [] # va contenir tous les scores
+        total_score = 0 # to do average score
+        total_data = 0 # to do average data
+
+        for u in i: # boucle chaque heure de la categories
+            
+            current_score =  score_data(u, current) # on score la donnee
+            scores.append(current_score)
+            max_score = max(max_score, current_score) # on verifie le score
+            total_score += current_score
+            total_data += u
             hour += 1
-            print("Hour: ", hour)
-            print("Data: ", u)
-            print("Score: ", score_data(u, current_categ))
-        
-        
+
+
+        average_score = total_score / 24
+        average_data = total_data / 24
+
+        if max_score:
+            # vient de chatgpt, on regarde l'index (l'heure) ou le meilleur score -1 est atteint
+            index_max_score = [i for i, val in enumerate(scores) if val > max_score - max_score_tolerance]
+        else:
+            index_max_score = [0]
+
+        current_dict = {
+            "type": current,
+            "data": i,
+            "scores": scores,
+            "max_score": max_score,
+            "average_score": average_score,
+            "average_data": average_data,
+            "best hour": index_max_score
+        } 
+
+        if current == 0:
+            wind_speed_dict = current_dict
+        elif current == 1:
+            wind_dir_dict = current_dict
+        elif current == 2:
+            wave_height_dict = current_dict 
+        elif current == 3:
+            wave_period_dict = current_dict 
+
         current += 1
-get_best_score_per_hours()
+
+    return wind_speed_dict, wind_dir_dict, wave_height_dict, wave_period_dict
+
+
+
+dicts = get_dicts()
+print("-------")
+for key, value in dicts[0].items():
+    print(f"{key}: {value}")
+print("-------")
+for key, value in dicts[1].items():
+    print(f"{key}: {value}")
+print("-------")
+for key, value in dicts[2].items():
+    print(f"{key}: {value}")
+print("-------")
+for key, value in dicts[3].items():
+    print(f"{key}: {value}")
