@@ -2,19 +2,20 @@ import openmeteo_requests
 import pandas as pd
 import requests_cache
 from retry_requests import retry
+import requests
 
 url1 = "https://api.open-meteo.com/v1/forecast"
 url2 = "https://marine-api.open-meteo.com/v1/marine"
-
+url_ntfy = "https://ntfy.lostpacket.org/surf"
 
 cache_session = requests_cache.CachedSession('.cache', expire_after = 3600)
 retry_session = retry(cache_session, retries = 5, backoff_factor = 0.2)
 openmeteo = openmeteo_requests.Client(session = retry_session)
 
-max_score_tolerance = 0.5 # plus on augmente ce nombre, plus il y aura d'horaires pouvant convenir
+max_score_tolerance = 1 # plus on augmente ce nombre, plus il y aura d'horaires pouvant convenir
 tolerance_step = 0.5 # par combien on va augmenter la tolerance a chaque probleme
 
-min_wave_height = 0.4
+min_wave_height = 0.7
 max_wave_height = 3
 min_wave_period = 6
 max_wave_period = 14
@@ -27,6 +28,16 @@ beach_direction = 45
 # Retrieved 2026-07-08, License - CC BY-SA 4.0
 def map_range(x, in_min, in_max, out_min, out_max):
   return (x - in_min) * (out_max - out_min) // (in_max - in_min) + out_min
+
+def ntfy(title, content, tags):
+    requests.post(url_ntfy,
+        data=content.encode('utf-8'),
+        headers={
+            "Title": title,
+            "Priority": "urgent",
+            "Tags": tags
+        })
+
 
 # vient de chatgpt
 def compare_arrays(arr):
@@ -193,11 +204,10 @@ def main():
     
     # si une des categ n'a que des 0 comme score, on arrete le programme, on ne peut pas faire de surf
     test = dict_speed["max_score"] * dict_dir["max_score"] * dict_height["max_score"] * dict_period["max_score"]
-    print("Test: ", test)
     if not test:
         # une des categ est nulle, on determine laquelle avant d'envoyer la reponse
         result["title"] = "Pas aujourd'hui pour le surf"
-        result["tags"] = "warning"
+        result["tags"] = "warning, exploding_head"
         bad_categ = "En effet, "
         if not dict_speed["max_score"]:
             bad_categ += f"le vent depasse les {round(dict_speed['average_data'], 2)}km/h."
@@ -235,25 +245,18 @@ def main():
 
             i += 1
         result["title"] = "Une petite session de surf ?"
-        result["content"] = f"Avec une tolerance de {int(current_tolerance)}, les meilleurs heures sont: "
+        result["content"] = f"Avec une tolerance de {current_tolerance}, les meilleurs heures sont: "
         result["content"] += "h, ".join(map(str, selected_hours)) + "h"
-        result["content"] += ". Voici un apercu des donnees analysee, en moyenne: \n"
-        result["content"] += f"Vitesse du vent: {round(dict_speed['average_data'], 2)}km/h, score: {round(dict_speed['average_score'], 2)}."
-        result["content"] += f" Ecart du vent: {round(dict_dir['average_data'], 2)} degres, score: {round(dict_dir['average_score'], 2)}."
-        result["content"] += f" Hauteur des vagues: {round(dict_height['average_data'], 2)}m, score: {round(dict_height['average_score'], 2)}."
-        result["content"] += f" Periode des vagues: {round(dict_period['average_data'], 2)}s, score: {round(dict_period['average_score'], 2)}."
+        result["content"] += ".\n\n"
+        result["content"] += "Voici un apercu des donnees analysees, en moyenne: \n"
+        result["content"] += f"- Vitesse du vent: {round(dict_speed['average_data'], 2)}km/h, score: {round(dict_speed['average_score'], 2)}.\n"
+        result["content"] += f"- Ecart du vent: {round(dict_dir['average_data'], 2)} degres, score: {round(dict_dir['average_score'], 2)}.\n"
+        result["content"] += f"- Hauteur des vagues: {round(dict_height['average_data'], 2)}m, score: {round(dict_height['average_score'], 2)}.\n"
+        result["content"] += f"- Periode des vagues: {round(dict_period['average_data'], 2)}s, score: {round(dict_period['average_score'], 2)}.\n"
+        result["tags"] = 'white_check_mark, surfing_man'
         return result
 
-print(main())
-# print("-------")
-# for key, value in dicts[0].items():
-#     print(f"{key}: {value}")
-# print("-------")
-# for key, value in dicts[1].items():
-#     print(f"{key}: {value}")
-# print("-------")
-# for key, value in dicts[2].items():
-#     print(f"{key}: {value}")
-# print("-------")
-# for key, value in dicts[3].items():
-#     print(f"{key}: {value}")
+
+message = main()
+ntfy(message["title"], message["content"], message["tags"])
+print(message)
