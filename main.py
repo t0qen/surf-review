@@ -15,6 +15,7 @@ openmeteo = openmeteo_requests.Client(session = retry_session)
 max_score_tolerance = 1 # plus on augmente ce nombre, plus il y aura d'horaires pouvant convenir
 tolerance_step = 0.5 # par combien on va augmenter la tolerance a chaque probleme
 
+script_launch_time = 8 # heure a laquelle on lance le script, les heures inferieures seront supprimées
 min_wave_height = 0.7
 max_wave_height = 3
 min_wave_period = 6
@@ -223,7 +224,7 @@ def main():
 
         selected_hours = []
         i = 0
-        while True:
+        while current_tolerance <= 10:
             best_hours = [
                 dict_speed["best_hours"],
                 dict_dir["best_hours"],
@@ -231,6 +232,11 @@ def main():
                 dict_period["best_hours"]
             ]
             selected_hours = compare_arrays(best_hours)
+
+            for h in selected_hours[:]:  # selected_hours[:] : fait une copie de la liste comme ca ca evite des bugs
+                if h < script_launch_time:
+                    selected_hours.remove(h)
+
             if selected_hours:
                 break
 
